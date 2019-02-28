@@ -33,18 +33,20 @@
 
 
 #include "flexdef.h"
-#include "version.h"
+//#include "version.h"
 #include "options.h"
 #include "tables.h"
 #include "parse.h"
+#include <io.h>
 
-static char flex_version[] = FLEX_VERSION;
+static char flex_version[] = "2.6.4";//FLEX_VERSION;
 
 /* declare functions that have forward references */
 
 void flexinit(int, char **);
 void readin(void);
 void set_up_initial_allocations(void);
+static char *basename2 (char *path, int should_strip_ext, char **ext_path);
 
 
 /* these globals are all defined and commented in flexdef.h */
@@ -111,20 +113,23 @@ bool    tablesext, tablesverify, gentables;
 char   *tablesfilename=0,*tablesname=0;
 struct yytbl_writer tableswr;
 
+int     prev_stdout = 0;
+char   *flex_temp_out_main = 0;
+
 /* Make sure program_name is initialized so we don't crash if writing
  * out an error message before getting the program name from argv[0].
  */
-char   *program_name = "flex";
+char   *program_name = "win_flex.exe";
 
 static const char outfile_template[] = "lex.%s.%s";
-static const char *backing_name = "lex.backup";
+static const char backing_name[] = "lex.backup";
 static const char tablesfile_template[] = "lex.%s.tables";
 
 /* From scan.l */
 extern FILE* yyout;
 
 static char outfile_path[MAXLINE];
-static int outfile_created = 0;
+//static int outfile_created = 0;
 static char *skelname = NULL;
 static int _stdout_closed = 0; /* flag to prevent double-fclose() on stdout. */
 const char *escaped_qstart = "]]M4_YY_NOOP[M4_YY_NOOP[M4_YY_NOOP[[";
@@ -137,7 +142,7 @@ int flex_main (int argc, char *argv[]);
 
 int flex_main (int argc, char *argv[])
 {
-	int     i, exit_status, child_status;
+	int     i;// , exit_status, child_status;
 
 	/* Set a longjmp target. Yes, I know it's a hack, but it gets worse: The
 	 * return value of setjmp, if non-zero, is the desired exit code PLUS ONE.
@@ -146,6 +151,7 @@ int flex_main (int argc, char *argv[])
 	 * specify a value of 0 to longjmp. FLEX_EXIT(n) should be used instead of
 	 * exit(n);
 	 */
+#if 0
 	exit_status = setjmp (flex_main_jmp_buf);
 	if (exit_status){
         if (stdout && !_stdout_closed && !ferror(stdout)){
@@ -164,6 +170,7 @@ int flex_main (int argc, char *argv[])
         }
         return exit_status - 1;
     }
+#endif
 
 	flexinit (argc, argv);
 
@@ -197,7 +204,7 @@ int flex_main (int argc, char *argv[])
 /* Wrapper around flex_main, so flex_main can be built as a library. */
 int main (int argc, char *argv[])
 {
-#if defined(ENABLE_NLS) && ENABLE_NLS
+#if ENABLE_NLS
 #if HAVE_LOCALE_H
 	setlocale (LC_MESSAGES, "");
         setlocale (LC_CTYPE, "");
@@ -310,9 +317,9 @@ void check_options (void)
 		}
 	}
 
-	if (extra_type)
-		buf_m4_define( &m4defs_buf, "M4_EXTRA_TYPE_DEFS", extra_type);
-
+    if (extra_type)
+        buf_m4_define( &m4defs_buf, "M4_EXTRA_TYPE_DEFS", extra_type);
+/*
 	if (!use_stdout) {
 		FILE   *prev_stdout;
 
@@ -337,10 +344,11 @@ void check_options (void)
 
 		outfile_created = 1;
 	}
-
+*/
 
     /* Setup the filter chain. */
     output_chain = filter_create_int(NULL, filter_tee_header, headerfilename);
+#if 0
     if ( !(m4 = getenv("M4"))) {
 	    char *slash;
 		m4 = M4;
@@ -381,14 +389,25 @@ void check_options (void)
 		}
 	}
     filter_create_ext(output_chain, m4, "-P", 0);
-    filter_create_int(output_chain, filter_fix_linedirs, NULL);
+#endif
+	filter_create_int(output_chain, filter_m4_p, NULL);
+	filter_create_int(output_chain, filter_fix_linedirs, NULL);
 
     /* For debugging, only run the requested number of filters. */
-    if (preproc_level > 0) {
+/*    if (preproc_level > 0) {
         filter_truncate(output_chain, preproc_level);
         filter_apply_chain(output_chain);
     }
-    yyout = stdout;
+	*/
+
+	/* collect all output to temp file to use it as input for filter chain */
+	prev_stdout = _dup(1);   // prev_stdout now refers to "stdout" 
+	freopen(flex_temp_out_main, "w+", stdout);
+
+	if (stdout == NULL)
+		lerr(_("could not create %s"), flex_temp_out_main);
+	
+	yyout = stdout;
 
 
 	/* always generate the tablesverify flag. */
@@ -415,7 +434,7 @@ void check_options (void)
 			snprintf (pname, nbytes, tablesfile_template, prefix);
 		}
 
-		if ((tablesout = fopen (tablesfilename, "w")) == NULL)
+		if ((tablesout = fopen (tablesfilename, "wb")) == NULL)
 			lerr (_("could not create %s"), tablesfilename);
 		free(pname);
 		tablesfilename = 0;
@@ -515,6 +534,72 @@ void flexend (int exit_status)
 
 	if (++called_before)
 		FLEX_EXIT (exit_status);
+
+	if (!exit_status)
+	{
+		FILE* out = NULL;
+
+		fflush(stdout);
+
+		/* process output */
+		if (fseek(stdout, 0, SEEK_SET))
+			flexerror(_("fseek for temp out failed"));
+
+		if (!use_stdout) {
+			if (!did_outfilename) {
+				char   *suffix;
+
+				if (C_plus_plus)
+					suffix = "cc";
+				else
+					suffix = "c";
+
+				snprintf(outfile_path, sizeof(outfile_path), outfile_template,
+					prefix, suffix);
+
+				outfilename = outfile_path;
+			}
+
+			out = fopen(outfilename, "wb+");
+			if (out == NULL)
+				lerr(_("could not create %s"), outfilename);
+
+			//outfile_created = 1;
+
+			/* For debugging, only run the requested number of filters. */
+			if (preproc_level > 0) {
+				filter_truncate(output_chain, preproc_level);
+				filter_apply_chain(output_chain, stdout, out);
+			}
+
+			if (fclose(out))
+				lerr(_("could not close %s"), outfilename);
+		}
+		else {
+			FILE* orig_stdout = _fdopen(prev_stdout, "w+");
+
+			if (orig_stdout == NULL)
+				lerr(_("stdout is not initialized"));
+
+			/* For debugging, only run the requested number of filters. */
+			if (preproc_level > 0) {
+				filter_truncate(output_chain, preproc_level);
+				filter_apply_chain(output_chain, stdout, orig_stdout);
+			}
+		}
+	}
+
+	/* cleanup temp file */
+	unlinktemp();
+
+	if (prev_stdout)
+	{
+		if (fclose(stdout))
+			lerr(_("error closing file %s"), flex_temp_out_main);
+
+		if (_unlink(flex_temp_out_main))
+			lerr(_("error deleting file %s"), flex_temp_out_main);
+	}
 
 	if (skelfile != NULL) {
 		if (ferror (skelfile))
@@ -648,7 +733,6 @@ void flexend (int exit_status)
                 "yyget_extra",
                 "yyget_in",
                 "yyget_leng",
-                "yyget_column",
                 "yyget_lineno",
                 "yyget_lloc",
                 "yyget_lval",
@@ -671,7 +755,6 @@ void flexend (int exit_status)
                 "yyset_debug",
                 "yyset_extra",
                 "yyset_in",
-                "yyset_column",
                 "yyset_lineno",
                 "yyset_lloc",
                 "yyset_lval",
@@ -713,7 +796,7 @@ void flexend (int exit_status)
 		fflush (header_out);
 		fclose (header_out);
 #endif
-
+/*
 	if (exit_status != 0 && outfile_created) {
 		if (ferror (stdout))
 			lerr (_("error writing output file %s"),
@@ -727,7 +810,7 @@ void flexend (int exit_status)
 			lerr (_("error deleting output file %s"),
 				outfilename);
 	}
-
+*/
 
 	if (backing_up_report && backing_up_file) {
 		if (num_backing_up == 0)
@@ -937,7 +1020,11 @@ void flexend (int exit_status)
 			 tblsiz);
 	}
 
-	FLEX_EXIT (exit_status);
+	free(flex_temp_out_main);
+	flex_temp_out_main = 0;
+
+	exit(exit_status);
+//	FLEX_EXIT (exit_status);
 }
 
 
@@ -948,6 +1035,10 @@ void flexinit (int argc, char **argv)
 	int     i, sawcmpflag, rv, optind;
 	char   *arg;
 	scanopt_t sopt;
+	char *ext_path = 0;
+
+	char   *flex_temp_out_main_template = add_tmp_dir("~flex_temp_out_main_XXXXXX");
+	flex_temp_out_main = _mktemp(flex_temp_out_main_template);
 
 	printstats = syntaxerror = trace = spprdflt = false;
 	lex_compat = posix_compat = C_plus_plus = backing_up_report =
@@ -996,10 +1087,12 @@ void flexinit (int argc, char **argv)
     flex_init_regex();
 
 	/* Enable C++ if program name ends with '+'. */
-	program_name = argv[0];
+	//program_name = basename (argv[0]);
+	program_name = basename2(argv[0], 0, &ext_path);
 
-	if (program_name != NULL &&
-	    program_name[strlen (program_name) - 1] == '+')
+//	if (program_name != NULL &&
+//	    program_name[strlen (program_name) - 1] == '+')
+	if (ext_path && *(--ext_path) == '+')
 		C_plus_plus = true;
 
 	/* read flags */
@@ -1033,11 +1126,6 @@ void flexinit (int argc, char **argv)
 
 		case OPT_BACKUP:
 			backing_up_report = true;
-			break;
-
-		case OPT_BACKUP_FILE:
-			backing_up_report = true;
-                        backing_name = arg;
 			break;
 
 		case OPT_DONOTHING:
@@ -1190,6 +1278,10 @@ void flexinit (int argc, char **argv)
             buf_m4_define( &m4defs_buf, "M4_YY_NO_UNISTD_H",0);
 			break;
 
+		case OPT_WIN_COMPAT:
+			buf_m4_define(&m4defs_buf, "M4_YY_WIN_COMPAT", 0);
+			break;
+
 		case OPT_TABLES_FILE:
 			tablesext = true;
 			tablesfilename = arg;
@@ -1208,7 +1300,7 @@ void flexinit (int argc, char **argv)
 			break;
 
 		case OPT_VERSION:
-			printf ("%s %s\n", (C_plus_plus ? "flex++" : "flex"), flex_version);
+			printf (_("%s %s\n"), program_name, flex_version);
 			FLEX_EXIT (0);
 
 		case OPT_WARN:
@@ -1401,14 +1493,6 @@ void flexinit (int argc, char **argv)
 			//buf_strdefine (&userdef_buf, "YY_NO_SET_LINENO", "1");
             buf_m4_define( &m4defs_buf, "M4_YY_NO_SET_LINENO",0);
 			break;
-		case OPT_NO_YYGET_COLUMN:
-			//buf_strdefine (&userdef_buf, "YY_NO_GET_COLUMN", "1");
-            buf_m4_define( &m4defs_buf, "M4_YY_NO_GET_COLUMN",0);
-			break;
-		case OPT_NO_YYSET_COLUMN:
-			//buf_strdefine (&userdef_buf, "YY_NO_SET_COLUMN", "1");
-            buf_m4_define( &m4defs_buf, "M4_YY_NO_SET_COLUMN",0);
-			break;
 		case OPT_NO_YYGET_IN:
 			//buf_strdefine (&userdef_buf, "YY_NO_GET_IN", "1");
             buf_m4_define( &m4defs_buf, "M4_YY_NO_GET_IN",0);
@@ -1517,7 +1601,7 @@ void readin (void)
 	}
 
 	if (backing_up_report) {
-		backing_up_file = fopen (backing_name, "w");
+		backing_up_file = fopen (backing_name, "wb");
 		if (backing_up_file == NULL)
 			lerr (_
 				("could not create backing-up info file %s"),
@@ -1792,6 +1876,34 @@ void set_up_initial_allocations (void)
 	nultrans = NULL;
 }
 
+/* extracts basename from path, optionally stripping the extension "\.*"
+* (same concept as /bin/sh `basename`, but different handling of extension). */
+static char *basename2(path, strip_ext, ext_path)
+char   *path;
+int strip_ext;		/* boolean */
+char **ext_path;
+{
+	char   *b, *e = 0;
+
+	b = path;
+	for (b = path; *path; path++)
+		if (*path == '/')
+			b = path + 1;
+		else if (*path == '\\')
+			b = path + 1;
+		else if (*path == '.')
+			e = path;
+
+	if (e && e > b)
+	{
+		if (strip_ext)
+			*e = '\0';
+		else if (ext_path)
+			*ext_path = e;
+	}
+
+	return b;
+}
 
 void usage (void)
 {
@@ -1832,8 +1944,7 @@ void usage (void)
 		  "  -t, --stdout            write scanner on stdout instead of %s\n"
 		  "      --yyclass=NAME      name of C++ class\n"
 		  "      --header-file=FILE   create a C header file in addition to the scanner\n"
-		  "      --tables-file[=FILE] write tables to FILE\n"
-		  "      --backup-file=FILE  write backing-up information to FILE\n" "\n"
+		  "      --tables-file[=FILE] write tables to FILE\n" "\n"
 		  "Scanner behavior:\n"
 		  "  -7, --7bit              generate 7-bit scanner\n"
 		  "  -8, --8bit              generate 8-bit scanner\n"
@@ -1853,6 +1964,7 @@ void usage (void)
 		  "       --bison-locations   include yylloc support.\n"
 		  "       --stdinit           initialize yyin/yyout to stdin/stdout\n"
 		  "       --nounistd          do not include <unistd.h>\n"
+		  "       --wincompat         windows compatibility (uses <io.h> instead of <unistd.h> and _isatty, _fileno functions)\n"
 		  "       --noFUNCTION        do not generate a particular FUNCTION\n"
 		  "\n" "Miscellaneous:\n"
 		  "  -c                      do-nothing POSIX option\n"
@@ -1860,6 +1972,6 @@ void usage (void)
 		  "  -?\n"
 		  "  -h, --help              produce this help message\n"
 		  "  -V, --version           report %s version\n"),
-		 backing_name, "flex", outfile_path, "flex");
+		 backing_name, program_name, outfile_path, program_name);
 
 }

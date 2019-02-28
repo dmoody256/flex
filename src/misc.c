@@ -116,14 +116,15 @@ void add_action (const char *new_text)
 	int     len = (int) strlen (new_text);
 
 	while (len + action_index >= action_size - 10 /* slop */ ) {
+		int     new_size = action_size * 2;
 
-		if (action_size > INT_MAX / 2)
+		if (new_size <= 0)
 			/* Increase just a little, to try to avoid overflow
 			 * on 16-bit machines.
 			 */
 			action_size += action_size / 8;
 		else
-			action_size = action_size * 2;
+			action_size = new_size;
 
 		action_array =
 			reallocate_character_array (action_array,
@@ -140,24 +141,20 @@ void add_action (const char *new_text)
 
 void   *allocate_array (int size, size_t element_size)
 {
-	void *new_array;
-#if HAVE_REALLOCARR
-	new_array = NULL;
-	if (reallocarr(&new_array, (size_t) size, element_size))
-		flexfatal (_("memory allocation failed in allocate_array()"));
+	void *mem;
+#if HAVE_REALLOCARRAY
+	/* reallocarray has built-in overflow detection */
+	mem = reallocarray(NULL, (size_t) size, element_size);
 #else
-# if HAVE_REALLOCARRAY
-	new_array = reallocarray(NULL, (size_t) size, element_size);
-# else
-	/* Do manual overflow detection */
 	size_t num_bytes = (size_t) size * element_size;
-	new_array = (size && SIZE_MAX / (size_t) size < element_size) ? NULL :
+	mem = (size && SIZE_MAX / (size_t) size < element_size) ? NULL :
 		malloc(num_bytes);
-# endif
-	if (!new_array)
-		flexfatal (_("memory allocation failed in allocate_array()"));
 #endif
-	return new_array;
+	if (!mem)
+		flexfatal (_
+			   ("memory allocation failed in allocate_array()"));
+
+	return mem;
 }
 
 
@@ -223,7 +220,7 @@ unsigned char clower (int c)
 	return (unsigned char) ((isascii (c) && isupper (c)) ? tolower (c) : c);
 }
 
-
+/*
 char *xstrdup(const char *s)
 {
 	char *s2;
@@ -233,7 +230,7 @@ char *xstrdup(const char *s)
 
 	return s2;
 }
-
+*/
 
 /* cclcmp - compares two characters for use by qsort with '\0' sorting last. */
 
@@ -662,22 +659,17 @@ char   *readable_form (int c)
 void   *reallocate_array (void *array, int size, size_t element_size)
 {
 	void *new_array;
-#if HAVE_REALLOCARR
-	new_array = array;
-	if (reallocarr(&new_array, (size_t) size, element_size))
-		flexfatal (_("attempt to increase array size failed"));
-#else
-# if HAVE_REALLOCARRAY
+#if HAVE_REALLOCARRAY
+	/* reallocarray has built-in overflow detection */
 	new_array = reallocarray(array, (size_t) size, element_size);
-# else
-	/* Do manual overflow detection */
+#else
 	size_t num_bytes = (size_t) size * element_size;
 	new_array = (size && SIZE_MAX / (size_t) size < element_size) ? NULL :
 		realloc(array, num_bytes);
-# endif
+#endif
 	if (!new_array)
 		flexfatal (_("attempt to increase array size failed"));
-#endif
+
 	return new_array;
 }
 
@@ -728,10 +720,7 @@ void skelout (void)
 			 */
 #define cmd_match(s) (strncmp(buf,(s),strlen(s))==0)
 
-		if (buf[1] == '#') {
-                	/* %# indicates comment line to be ignored */
-            	} 
-		else if (buf[1] == '%') {
+			if (buf[1] == '%') {
 				/* %% is a break point for skelout() */
 				return;
 			}
@@ -776,9 +765,8 @@ void skelout (void)
 					outn ((char *) (yydmap_buf.elts));
 			}
             else if (cmd_match (CMD_DEFINE_YYTABLES)) {
-                if ( tablesext )
-                    out_str( "#define YYTABLES_NAME \"%s\"\n",
-                           tablesname ? tablesname : "yytables" );
+                out_str("#define YYTABLES_NAME \"%s\"\n",
+                        tablesname?tablesname:"yytables");
             }
 			else if (cmd_match (CMD_IF_CPP_ONLY)) {
 				/* only for C++ */

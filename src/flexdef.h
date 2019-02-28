@@ -40,10 +40,17 @@
 #endif
 
 #include <stdio.h>
+// For Visual Studio 2013 we need this workaround
+#ifdef _MSC_VER
+	#if _MSC_VER < 1900
+		#define snprintf _snprintf
+	#endif
+#endif
 #include <stdlib.h>
 #include <stdarg.h>
 #include <setjmp.h>
 #include <ctype.h>
+//#include <libgen.h> /* for XPG version of basename(3) */
 #include <string.h>
 #include <math.h>
 
@@ -57,7 +64,7 @@
 #include <limits.h>
 #endif
 /* Required: dup() and dup2() in <unistd.h> */
-#include <unistd.h>
+//#include <unistd.h>
 #ifdef HAVE_NETINET_IN_H
 #include <netinet/in.h>
 #endif
@@ -67,19 +74,17 @@
 /* Required: stat() in <sys/stat.h> */
 #include <sys/stat.h>
 /* Required: wait() in <sys/wait.h> */
-#include <sys/wait.h>
+//#include <sys/wait.h>
 #include <stdbool.h>
 #include <stdarg.h>
 /* Required: regcomp(), regexec() and regerror() in <regex.h> */
 #include <regex.h>
 /* Required: strcasecmp() in <strings.h> */
-#include <strings.h>
+//#include <strings.h>
 #include "flexint.h"
 
-/* We use gettext. So, when we write strings which should be translated, we
- * mark them with _()
- */
-#if defined(ENABLE_NLS) && ENABLE_NLS
+/* We use gettext. So, when we write strings which should be translated, we mark them with _() */
+#ifdef ENABLE_NLS
 #ifdef HAVE_LOCALE_H
 #include <locale.h>
 #endif /* HAVE_LOCALE_H */
@@ -632,6 +637,10 @@ extern int sectnum, nummt, hshcol, dfaeql, numeps, eps2, num_reallocs;
 extern int tmpuses, totnst, peakpairs, numuniq, numdup, hshsave;
 extern int num_backing_up, bol_needed;
 
+#ifndef HAVE_REALLOCARRAY
+void *reallocarray(void *, size_t, size_t);
+#endif
+
 void   *allocate_array(int, size_t);
 void   *reallocate_array(void *, int, size_t);
 
@@ -1067,7 +1076,8 @@ extern bool no_section3_escape; /* True if the undocumented option --unsafe-no-m
 /* For setjmp/longjmp (instead of calling exit(2)). Linkage in main.c */
 extern jmp_buf flex_main_jmp_buf;
 
-#define FLEX_EXIT(status) longjmp(flex_main_jmp_buf,(status)+1)
+//#define FLEX_EXIT(status) longjmp(flex_main_jmp_buf,(status)+1)
+#define FLEX_EXIT(status) exit(status)
 
 /* Removes all \n and \r chars from tail of str. returns str. */
 extern char *chomp (char *str);
@@ -1109,7 +1119,9 @@ struct filter {
     void * extra;         /**< extra data passed to filter_func */
 	int     argc;         /**< arg count */
 	const char ** argv;   /**< arg vector, \0-terminated */
-    struct filter * next; /**< next filter or NULL */
+	FILE* in_file;
+	FILE* out_file;
+	struct filter * next; /**< next filter or NULL */
 };
 
 /* output filter chain */
@@ -1118,17 +1130,22 @@ extern struct filter *filter_create_ext (struct filter * chain, const char *cmd,
 struct filter *filter_create_int(struct filter *chain,
 				  int (*filter_func) (struct filter *),
                   void *extra);
-extern bool filter_apply_chain(struct filter * chain);
+extern bool filter_apply_chain(struct filter * chain, FILE* in_file, FILE* out_file);
 extern int filter_truncate(struct filter * chain, int max_len);
 extern int filter_tee_header(struct filter *chain);
 extern int filter_fix_linedirs(struct filter *chain);
+extern int filter_m4_p(struct filter *chain);
+
+extern char* add_tmp_dir(const char* tmp_file_name);
+extern FILE* mkstempFILE(char *tmpl, const char *mode);
+extern void unlinktemp();
 
 
 /*
  * From "regex.c"
  */
 
-extern regex_t regex_linedir;
+extern regex_t regex_linedir, regex_blank_line;
 bool flex_init_regex(void);
 void flex_regcomp(regex_t *preg, const char *regex, int cflags);
 char   *regmatch_dup (regmatch_t * m, const char *src);

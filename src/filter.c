@@ -31,6 +31,148 @@ static const char * check_4_gnu_m4 =
 /** global chain. */
 struct filter *output_chain = NULL;
 
+static const char letters[] =
+"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+
+#include <fcntl.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <stdio.h>
+#include <process.h>
+#include <io.h>
+
+/* Adds temporary dir if environment variable FLEX_TMP_DIR is set */
+char* add_tmp_dir(const char* tmp_file_name)
+{
+	char* new_tmp_file_name = 0;
+	size_t tmp_dir_len = 0;
+	size_t len = 0;
+	char const *tmp_dir = getenv ("FLEX_TMP_DIR");
+
+	if (!tmp_dir)
+		return _strdup(tmp_file_name);
+
+	tmp_dir_len = strlen(tmp_dir);
+	len = tmp_dir_len + strlen(tmp_file_name) + 2; // two extra chars: '\' between dir and file name and '\0' at the end
+	new_tmp_file_name = (char*)malloc(len*sizeof(char));
+	if (tmp_dir[tmp_dir_len-1] == '\\' || tmp_dir[tmp_dir_len-1] == '/')
+		sprintf(new_tmp_file_name, "%s%s", tmp_dir, tmp_file_name);
+	else
+		sprintf(new_tmp_file_name, "%s\\%s", tmp_dir, tmp_file_name);
+
+	return new_tmp_file_name;
+}
+
+int max_temp_file_names = 100;
+int num_temp_file_names = 0;
+char* temp_file_names[100];
+/* Generate a temporary file name based on TMPL.  TMPL must match the
+   rules for mk[s]temp (i.e. end in "XXXXXX").  The name constructed
+   does not exist at the time of the call to mkstemp.  TMPL is
+   overwritten with the result.  */
+FILE* mkstempFILE (char *tmpl, const char *mode)
+{
+	int len;
+	char *XXXXXX;
+	static unsigned long long value;
+	unsigned long long random_time_bits;
+	unsigned int count;
+	FILE* fd = NULL;
+	int r;
+
+	/* A lower bound on the number of temporary files to attempt to
+	generate.  The maximum total number of temporary file names that
+	can exist for a given template is 62**6.  It should never be
+	necessary to try all these combinations.  Instead if a reasonable
+	number of names is tried (we define reasonable as 62**3) fail to
+	give the system administrator the chance to remove the problems.  */
+#define ATTEMPTS_MIN (62 * 62 * 62)
+
+	/* The number of times to attempt to generate a temporary file.  To
+	conform to POSIX, this must be no smaller than TMP_MAX.  */
+#if ATTEMPTS_MIN < TMP_MAX
+	unsigned int attempts = TMP_MAX;
+#else
+	unsigned int attempts = ATTEMPTS_MIN;
+#endif
+
+	if (num_temp_file_names >= max_temp_file_names)
+		return NULL;
+
+	len = strlen (tmpl);
+	if (len < 6 || strcmp (&tmpl[len - 6], "XXXXXX"))
+	{
+		return NULL;
+	}
+
+	/* This is where the Xs start.  */
+	XXXXXX = &tmpl[len - 6];
+
+	/* Get some more or less random data but unique per process */
+	{
+		static unsigned long long g_value;
+		g_value = _getpid();
+ 		g_value += 100;
+		random_time_bits = (((unsigned long long)234546 << 32)
+			| (unsigned long long)g_value);
+	}
+	value += random_time_bits ^ (unsigned long long)122434;
+
+	for (count = 0; count < attempts; value += 7777, ++count)
+	{
+		char* tmp_file_name = 0;
+		unsigned long long v = value;
+
+		/* Fill in the random bits.  */
+		XXXXXX[0] = letters[v % 62];
+		v /= 62;
+		XXXXXX[1] = letters[v % 62];
+		v /= 62;
+		XXXXXX[2] = letters[v % 62];
+		v /= 62;
+		XXXXXX[3] = letters[v % 62];
+		v /= 62;
+		XXXXXX[4] = letters[v % 62];
+		v /= 62;
+		XXXXXX[5] = letters[v % 62];
+
+		tmp_file_name = add_tmp_dir(tmpl);
+		/* file doesn't exist */
+		if (r = _access(tmp_file_name, 0) == -1)
+		{
+			fd = fopen (tmp_file_name, mode);
+			if (fd)
+			{
+				temp_file_names[num_temp_file_names] = tmp_file_name;
+				++num_temp_file_names;
+				return fd;
+			}
+		}
+
+		free(tmp_file_name);
+		tmp_file_name = 0;
+	}
+
+	/* We got out of the loop because we ran out of combinations to try.  */
+	return NULL;
+}
+
+/* delete all temp files */
+void unlinktemp()
+{
+	while (num_temp_file_names)
+	{
+		--num_temp_file_names;
+
+		if (_unlink(temp_file_names[num_temp_file_names]))
+			fprintf(stderr, _("error delete file %s"), temp_file_names[num_temp_file_names]);
+
+		free(temp_file_names[num_temp_file_names]);
+		temp_file_names[num_temp_file_names] = NULL;
+	}
+}
+
+#if 0
 /* Allocate and initialize an external filter.
  * @param chain the current chain or NULL for new chain
  * @param cmd the command to execute.
@@ -47,9 +189,10 @@ struct filter *filter_create_ext (struct filter *chain, const char *cmd,
 	va_list ap;
 
 	/* allocate and initialize new filter */
-	f = calloc(sizeof(struct filter), 1);
+	f = malloc(sizeof(struct filter));
 	if (!f)
-		flexerror(_("calloc failed (f) in filter_create_ext"));
+		flexerror(_("malloc failed (f) in filter_create_ext"));
+	memset (f, 0, sizeof (*f));
 	f->filter_func = NULL;
 	f->extra = NULL;
 	f->next = NULL;
@@ -83,7 +226,7 @@ struct filter *filter_create_ext (struct filter *chain, const char *cmd,
 	va_end (ap);
 	return f;
 }
-
+#endif
 /* Allocate and initialize an internal filter.
  * @param chain the current chain or NULL for new chain
  * @param filter_func The function that will perform the filtering.
@@ -99,12 +242,15 @@ struct filter *filter_create_int (struct filter *chain,
 	struct filter *f;
 
 	/* allocate and initialize new filter */
-	f = calloc(sizeof(struct filter), 1);
+	f = malloc(sizeof(struct filter));
 	if (!f)
-		flexerror(_("calloc failed in filter_create_int"));
+		flexerror(_("malloc failed in filter_create_int"));
+	memset (f, 0, sizeof (*f));
 	f->next = NULL;
 	f->argc = 0;
 	f->argv = NULL;
+	f->in_file = NULL;
+	f->out_file = NULL;
 
 	f->filter_func = filter_func;
 	f->extra = extra;
@@ -123,8 +269,63 @@ struct filter *filter_create_int (struct filter *chain,
  *  @param chain The head of the chain.
  *  @return true on success.
  */
-bool filter_apply_chain (struct filter * chain)
+bool filter_apply_chain (struct filter * chain, FILE* in_file, FILE* out_file)
 {
+	char out_file_name[256] = "~X_flex_temp_XXXXXX";
+	static char file_num = '0';
+	FILE* mid_out_file = NULL;
+	int r;
+	bool result = true;
+
+	++file_num;
+	out_file_name[1] = file_num;
+
+	/* nothing to do */
+	if (!chain)
+		return true;
+
+	/* setup in/out files*/
+	chain->in_file = in_file;
+	if (chain->next)
+	{
+		mid_out_file = mkstempFILE(out_file_name, "wb+");
+		if (!mid_out_file)
+			flexerror (_("fail create temp file"));
+
+		chain->out_file = mid_out_file;
+	}
+	else
+	{
+		chain->out_file = out_file;
+	}
+
+	/* run current filter */
+	if (!chain->filter_func)
+		flexerror (_("fail call filter"));
+
+	r = chain->filter_func (chain);
+
+	if (r == -1)
+		flexfatal (_("filter_func failed"));
+
+	if (chain->next)
+	{
+		if (fseek(chain->out_file, 0, SEEK_SET) != 0)
+			flexerror(_("fseek failed"));
+
+		/* go to next filter */
+		result = filter_apply_chain(chain->next, chain->out_file, out_file);
+	}
+
+	/* close temp file */
+	if (mid_out_file)
+	{
+		if (fclose(mid_out_file))
+			lerr(_("error close file %s"), out_file_name);
+	}
+
+	return result;
+#if 0		
 	int     pid, pipes[2];
 
 
@@ -194,6 +395,7 @@ clearerr(stdin);
     fseek (stdout, 0, SEEK_CUR);
 
 	return true;
+#endif
 }
 
 /** Truncate the chain to max_len number of filters.
@@ -228,10 +430,12 @@ int filter_tee_header (struct filter *chain)
 	 * header file at the same time.
 	 */
 
-	char    buf[512];
+	const int readsz = 512;
+	char   *buf;
 	int     to_cfd = -1;
 	FILE   *to_c = NULL, *to_h = NULL;
 	bool    write_header;
+	FILE* header_out_file = NULL;
 
 	write_header = (chain->extra != NULL);
 
@@ -240,16 +444,31 @@ int filter_tee_header (struct filter *chain)
 	 * stdout, and fork the rest of the chain again.
 	 */
 
+     /*
 	if ((to_cfd = dup (1)) == -1)
 		flexfatal (_("dup(1) failed"));
 	to_c = fdopen (to_cfd, "w");
+    */
+	if (!chain->out_file)
+		flexfatal (_("out_file failed"));
+
+	if (!chain->in_file)
+		flexfatal (_("in_file failed"));
+
+	to_c = chain->out_file;
 
 	if (write_header) {
+        /*
 		if (freopen ((char *) chain->extra, "w", stdout) == NULL)
 			flexfatal (_("freopen(headerfilename) failed"));
 
 		filter_apply_chain (chain->next);
 		to_h = stdout;
+        */
+		char tmp_file_name[256] = "~temp_header_file_XXXXXX";
+		to_h = mkstempFILE(tmp_file_name, "wb+");
+		if (!to_h)
+			flexfatal (_("fopen(headerfilename) failed"));
 	}
 
 	/* Now to_c is a pipe to the C branch, and to_h is a pipe to the H branch.
@@ -280,7 +499,11 @@ int filter_tee_header (struct filter *chain)
 	fprintf (to_c, "m4_define( [[M4_YY_OUTFILE_NAME]],[[%s]])m4_dnl\n",
 		 outfilename ? outfilename : "<stdout>");
 
-	while (fgets (buf, sizeof buf, stdin)) {
+	buf = malloc((size_t) readsz);
+	if (!buf)
+		flexerror(_("malloc failed in filter_tee_header"));
+	//while (fgets(buf, readsz, stdin)) {
+	while (fgets(buf, readsz, chain->in_file)) {
 		fputs (buf, to_c);
 		if (write_header)
 			fputs (buf, to_h);
@@ -298,20 +521,37 @@ int filter_tee_header (struct filter *chain)
 		fputs ("m4_undefine( [[M4_YY_IN_HEADER]])m4_dnl\n", to_h);
 
 		fflush (to_h);
-		if (ferror (to_h))
-			lerr (_("error writing output file %s"),
-				(char *) chain->extra);
+		if (ferror(to_h))
+			lerr(_("error writing output file %s"),
+			(char *)chain->extra);
+		else
+		{
+			if (fseek(to_h, 0, SEEK_SET))
+				flexerror(_("fseek failed"));
 
-		else if (fclose (to_h))
-			lerr (_("error closing output file %s"),
-				(char *) chain->extra);
+			header_out_file = fopen((char *)chain->extra, "wb");
+			if (!header_out_file)
+				flexfatal(_("fopen(headerfilename) failed"));
+
+			/* make branch for header file */
+			filter_apply_chain(chain->next, to_h, header_out_file);
+
+			/* cleanup */
+			if (fclose(to_h))
+				lerr(_("error closing output file 1 %s"),
+				(char *)chain->extra);
+
+			if (fclose(header_out_file))
+				lerr(_("error closing output file 2 %s"),
+				(char *)chain->extra);
+		}
 	}
 
 	fflush (to_c);
 	if (ferror (to_c))
 		lerr (_("error writing output file %s"),
 			outfilename ? outfilename : "<stdout>");
-
+/*
 	else if (fclose (to_c))
 		lerr (_("error closing output file %s"),
 			outfilename ? outfilename : "<stdout>");
@@ -320,13 +560,22 @@ int filter_tee_header (struct filter *chain)
 
 	FLEX_EXIT (0);
 	return 0;
+    */
+	return 0;
 }
 
-static bool is_blank_line (const char *str)
+extern int main_m4 (int argc, char *const *argv, FILE* in, FILE* out);
+
+int filter_m4_p (struct filter *chain)
 {
-	while (isspace(*str))
-		str++;
-	return (*str == '\0');
+    char const *argv[10];
+    int i = 0;
+
+    argv[i++] = "M4";
+    argv[i++] = "-P";
+    argv[i++] = NULL;
+
+	return main_m4 (i-1, argv, chain->in_file, chain->out_file);
 }
 
 /** Adjust the line numbers in the #line directives of the generated scanner.
@@ -337,8 +586,8 @@ static bool is_blank_line (const char *str)
  */
 int filter_fix_linedirs (struct filter *chain)
 {
-	char   buf[512];
-	const size_t readsz = sizeof buf;
+	char   *buf;
+	const size_t readsz = 512;
 	int     lineno = 1;
 	bool    in_gen = true;	/* in generated code */
 	bool    last_was_blank = false;
@@ -346,7 +595,11 @@ int filter_fix_linedirs (struct filter *chain)
 	if (!chain)
 		return 0;
 
-	while (fgets (buf, (int) readsz, stdin)) {
+	buf = malloc(readsz);
+	if (!buf)
+		flexerror(_("malloc failed in filter_fix_linedirs"));
+
+	while (fgets (buf, (int) readsz, chain->in_file/*stdin*/)) {
 
 		regmatch_t m[10];
 
@@ -388,7 +641,7 @@ int filter_fix_linedirs (struct filter *chain)
 				/* Adjust the line directives. */
 				in_gen = true;
 				snprintf (buf, readsz, "#line %d \"%s\"\n",
-					  lineno + 1, filename);
+					  lineno, filename);
 			}
 			else {
 				/* it's a #line directive for code we didn't write */
@@ -400,7 +653,9 @@ int filter_fix_linedirs (struct filter *chain)
 		}
 
 		/* squeeze blank lines from generated code */
-		else if (in_gen && is_blank_line(buf)) {
+		else if (in_gen
+			 && regexec (&regex_blank_line, buf, 0, NULL,
+				     0) == 0) {
 			if (last_was_blank)
 				continue;
 			else
@@ -412,18 +667,18 @@ int filter_fix_linedirs (struct filter *chain)
 			last_was_blank = false;
 		}
 
-		fputs (buf, stdout);
+		fputs (buf, chain->out_file/*stdout*/);
 		lineno++;
 	}
-	fflush (stdout);
-	if (ferror (stdout))
+	fflush (chain->out_file/*stdout*/);
+	if (ferror (chain->out_file/*stdout*/))
 		lerr (_("error writing output file %s"),
 			outfilename ? outfilename : "<stdout>");
-
+/*
 	else if (fclose (stdout))
 		lerr (_("error closing output file %s"),
 			outfilename ? outfilename : "<stdout>");
-
+*/
 	return 0;
 }
 

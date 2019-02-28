@@ -1,11 +1,5 @@
 /* scan.l - scanner for flex input -*-C-*- */
 
-%top{
-/* flexdef.h includes config.h, which may contain macros that alter the API */
-/* of libc functions. Must include first before any libc header. */
-#include "flexdef.h"
-}
-
 %{
 /*  Copyright (c) 1990 The Regents of the University of California. */
 /*  All rights reserved. */
@@ -38,6 +32,7 @@
 /*  WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR */
 /*  PURPOSE. */
 
+#include "flexdef.h"
 #include "parse.h"
 extern bool tablesverify, tablesext;
 extern int trlcontxt; /* Set in  parse.y for each rule. */
@@ -261,7 +256,7 @@ M4QEND      "]""]"
 	\n		yy_pop_state();
 	[[:digit:]]+	linenum = myctoi( yytext );
 
-	"\""[^""\n]*"\""	{
+	\"[^"\n]*\"	{
 			free(infilename);
 			infilename = xstrdup(yytext + 1);
 			infilename[strlen( infilename ) - 1] = '\0';
@@ -438,8 +433,6 @@ M4QEND      "]""]"
     yyset_extra     ACTION_M4_IFDEF("M4""_YY_NO_SET_EXTRA", ! option_sense);
     yyget_leng      ACTION_M4_IFDEF("M4""_YY_NO_GET_LENG", ! option_sense);
     yyget_text      ACTION_M4_IFDEF("M4""_YY_NO_GET_TEXT", ! option_sense);
-    yyget_column    ACTION_M4_IFDEF("M4""_YY_NO_GET_COLUMN", ! option_sense);
-    yyset_column    ACTION_M4_IFDEF("M4""_YY_NO_SET_COLUMN", ! option_sense);
     yyget_lineno    ACTION_M4_IFDEF("M4""_YY_NO_GET_LINENO", ! option_sense);
     yyset_lineno    ACTION_M4_IFDEF("M4""_YY_NO_SET_LINENO", ! option_sense);
     yyget_in        ACTION_M4_IFDEF("M4""_YY_NO_GET_IN", ! option_sense);
@@ -464,7 +457,7 @@ M4QEND      "]""]"
                     }
 
 
-	"\""[^""\n]*"\""	{
+	\"[^"\n]*\"	{
 			if(yyleng-1 < MAXLINE)
         		 {
 			strncpy( nmstr, yytext + 1, sizeof(nmstr) );
@@ -534,7 +527,7 @@ M4QEND      "]""]"
                         return '<';
                     }
 	^{OPTWS}"^"	return '^';
-	"\""		BEGIN(QUOTE); return '"';
+	\"		BEGIN(QUOTE); return '"';
 	"{"/[[:digit:]]	{
 			BEGIN(NUM);
 			if ( lex_compat || posix_compat )
@@ -800,8 +793,8 @@ nmstr[yyleng - 2 - end_is_ws] = '\0';  /* chop trailing brace */
 
 
 <QUOTE>{
-	[^""\n]		RETURNCHAR;
-	"\""		BEGIN(SECT2); return '"';
+	[^"\n]		RETURNCHAR;
+	\"		BEGIN(SECT2); return '"';
 
 	{NL}		{
 			synerr( _( "missing quote" ) );
@@ -941,11 +934,11 @@ nmstr[yyleng - 2 - end_is_ws] = '\0';  /* chop trailing brace */
 <ACTION>{
 	"{"		ACTION_ECHO; ++bracelevel;
 	"}"		ACTION_ECHO; --bracelevel;
-	[^[:alpha:]_{}""''/\n\[\]]+	ACTION_ECHO;
+	[^[:alpha:]_{}\"'/\n\[\]]+	ACTION_ECHO;
         {NAME}		ACTION_ECHO;
-        "'"([^''\\\n]|\\.)"'" ACTION_ECHO; /* character constant */
+        "'"([^\'\\\n]|\\.)"'" ACTION_ECHO; /* character constant */
         "'"             ACTION_ECHO; BEGIN(CHARACTER_CONSTANT);
-	"\""		ACTION_ECHO; BEGIN(ACTION_STRING);
+	\"		ACTION_ECHO; BEGIN(ACTION_STRING);
 	{NL} {
                 ++linenum;
                 ACTION_ECHO;
@@ -961,12 +954,12 @@ nmstr[yyleng - 2 - end_is_ws] = '\0';  /* chop trailing brace */
 }
 
 <ACTION_STRING>{
-	[^\[\]""\\\n]+	ACTION_ECHO;
-	"\""		ACTION_ECHO; BEGIN(ACTION);
+	[^\[\]\"\\\n]+	ACTION_ECHO;
+	\"		ACTION_ECHO; BEGIN(ACTION);
 }
 <CHARACTER_CONSTANT>{
-	[^\[\]''\\\n]+  ACTION_ECHO;
-        "'"             ACTION_ECHO; BEGIN(ACTION);
+	[^\[\]\'\\\n]+  ACTION_ECHO;
+        \'              ACTION_ECHO; BEGIN(ACTION);
 }
 <ACTION_STRING,CHARACTER_CONSTANT>{
         (\\\n)*         ACTION_ECHO;

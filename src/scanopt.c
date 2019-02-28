@@ -68,7 +68,7 @@ static int PRINTLEN(struct _scanopt_t *, int);
 static int RVAL(struct _scanopt_t *, int);
 static int FLAGS(struct _scanopt_t *, int);
 static const char *DESC(struct _scanopt_t *, int);
-static void scanopt_err(struct _scanopt_t *, int, int);
+static int scanopt_err(struct _scanopt_t *, int, int);
 static int matchlongopt(char *, char **, int *, char **, int *);
 static int find_opt(struct _scanopt_t *, int, char *, int, int *, int *opt_offset);
 
@@ -229,15 +229,17 @@ typedef struct usg_elem usg_elem;
 int     scanopt_usage (scanopt_t *scanner, FILE *fp, const char *usage)
 {
 	struct _scanopt_t *s;
-	int     i, columns;
-	const int indent = 2;
+	int     i, columns, indent = 2;
 	usg_elem *byr_val = NULL;	/* option indices sorted by r_val */
 	usg_elem *store;	/* array of preallocated elements. */
 	int     store_idx = 0;
 	usg_elem *ue;
-	int     opt_col_width = 0, desc_col_width = 0;
-	int     desccol;
+	int     maxlen[2];
+	int     desccol = 0;
 	int     print_run = 0;
+
+	maxlen[0] = 0;
+	maxlen[1] = 0;
 
 	s = (struct _scanopt_t *) scanner;
 
@@ -245,7 +247,16 @@ int     scanopt_usage (scanopt_t *scanner, FILE *fp, const char *usage)
 		fprintf (fp, "%s\n", usage);
 	}
 	else {
-		fprintf (fp, _("Usage: %s [OPTIONS]...\n"), s->argv[0]);
+		/* Find the basename of argv[0] */
+		const char *p;
+
+		p = s->argv[0] + strlen (s->argv[0]);
+		while (p != s->argv[0] && *p != '/')
+			--p;
+		if (*p == '/')
+			p++;
+
+		fprintf (fp, _("Usage: %s [OPTIONS]...\n"), p);
 	}
 	fprintf (fp, "\n");
 
@@ -276,7 +287,7 @@ int     scanopt_usage (scanopt_t *scanner, FILE *fp, const char *usage)
 				}
 				if (!ptr_if_no_alias
 				    &&
-				    strcasecmp (NAME (s, (*ue_curr)->idx),
+					_stricmp(NAME (s, (*ue_curr)->idx),
 						NAME (s, ue->idx)) > 0) {
 					ptr_if_no_alias = ue_curr;
 				}
@@ -313,36 +324,65 @@ int     scanopt_usage (scanopt_t *scanner, FILE *fp, const char *usage)
 	/* first pass calculate how much room we need. */
 	for (ue = byr_val; ue; ue = ue->next) {
 		usg_elem *ap;
-		int     len;
+		int     len = 0;
+		int     nshort = 0, nlong = 0;
 
-		len = PRINTLEN(s, ue->idx);
 
+#define CALC_LEN(i) do {\
+          if(FLAGS(s,i) & IS_LONG) \
+              len +=  (nlong++||nshort) ? 2+PRINTLEN(s,i) : PRINTLEN(s,i);\
+          else\
+              len +=  (nshort++||nlong)? 2+PRINTLEN(s,i) : PRINTLEN(s,i);\
+        }while(0)
+
+		if (!(FLAGS (s, ue->idx) & IS_LONG))
+			CALC_LEN (ue->idx);
+
+		/* do short aliases first. */
 		for (ap = ue->alias; ap; ap = ap->next) {
-			len += PRINTLEN(s, ap->idx) + (int) strlen(", ");
+			if (FLAGS (s, ap->idx) & IS_LONG)
+				continue;
+			CALC_LEN (ap->idx);
 		}
 
-		if (len > opt_col_width)
-			opt_col_width = len;
+		if (FLAGS (s, ue->idx) & IS_LONG)
+			CALC_LEN (ue->idx);
+
+		/* repeat the above loop, this time for long aliases. */
+		for (ap = ue->alias; ap; ap = ap->next) {
+			if (!(FLAGS (s, ap->idx) & IS_LONG))
+				continue;
+			CALC_LEN (ap->idx);
+		}
+
+		if (len > maxlen[0])
+			maxlen[0] = len;
 
 		/* It's much easier to calculate length for description column! */
 		len = (int) strlen (DESC (s, ue->idx));
-		if (len > desc_col_width)
-			desc_col_width = len;
+		if (len > maxlen[1])
+			maxlen[1] = len;
 	}
 
 	/* Determine how much room we have, and how much we will allocate to each col.
 	 * Do not address pathological cases. Output will just be ugly. */
 	columns = get_cols () - 1;
-	if (opt_col_width + desc_col_width + indent * 2 > columns) {
-		/* opt col gets whatever it wants. we'll wrap the desc col. */
-		desc_col_width = columns - (opt_col_width + indent * 2);
-		if (desc_col_width < 14)	/* 14 is arbitrary lower limit on desc width. */
-			desc_col_width = INT_MAX;
+	if (maxlen[0] + maxlen[1] + indent * 2 > columns) {
+		/* col 0 gets whatever it wants. we'll wrap the desc col. */
+		maxlen[1] = columns - (maxlen[0] + indent * 2);
+		if (maxlen[1] < 14)	/* 14 is arbitrary lower limit on desc width. */
+			maxlen[1] = INT_MAX;
 	}
-	desccol = opt_col_width + indent * 2;
+	desccol = maxlen[0] + indent * 2;
 
-#define PRINT_SPACES(fp,n) \
-	fprintf((fp), "%*s", (n), "")
+#define PRINT_SPACES(fp,n)\
+    do{\
+        int _n;\
+        _n=(n);\
+        while(_n-- > 0)\
+            fputc(' ',(fp));\
+    }while(0)
+
 
 	/* Second pass (same as above loop), this time we print. */
 	/* Sloppy hack: We iterate twice. The first time we print short and long options.
@@ -396,7 +436,7 @@ int     scanopt_usage (scanopt_t *scanner, FILE *fp, const char *usage)
 			/* pad to desccol */
 			PRINT_SPACES (fp, desccol - nchars);
 
-			/* Print description, wrapped to desc_col_width columns. */
+			/* Print description, wrapped to maxlen[1] columns. */
 			if (1) {
 				const char *pstart;
 
@@ -407,7 +447,7 @@ int     scanopt_usage (scanopt_t *scanner, FILE *fp, const char *usage)
 
 					p = pstart;
 
-					while (*p && n < desc_col_width
+					while (*p && n < maxlen[1]
 					       && *p != '\n') {
 						if (isspace ((unsigned char)(*p))
 						    || *p == '-') lastws =
@@ -457,7 +497,7 @@ int     scanopt_usage (scanopt_t *scanner, FILE *fp, const char *usage)
 #endif /* no scanopt_usage */
 
 
-static void scanopt_err(struct _scanopt_t *s, int is_short, int err)
+static int scanopt_err (struct _scanopt_t *s, int is_short, int err)
 {
 	const char *optname = "";
 	char    optchar[2];
@@ -502,6 +542,7 @@ static void scanopt_err(struct _scanopt_t *s, int is_short, int err)
 			break;
 		}
 	}
+	return err;
 }
 
 
@@ -688,8 +729,7 @@ int     scanopt (scanopt_t *svoid, char **arg, int *optindex)
 
 		if (!find_opt
 		    (s, 0, pstart, namelen, &errcode, &opt_offset)) {
-			scanopt_err(s, 1, errcode);
-			return errcode;
+			return scanopt_err (s, 1, errcode);
 		}
 
 		optarg = pstart + 1;
@@ -708,7 +748,8 @@ int     scanopt (scanopt_t *svoid, char **arg, int *optindex)
 
 	/* Look ahead in argv[] to see if there is something
 	 * that we can use as an argument (if needed). */
-	has_next = s->index + 1 < s->argc;
+	has_next = s->index + 1 < s->argc
+		&& strcmp ("--", s->argv[s->index + 1]) != 0;
 
 	optp = s->options + opt_offset;
 	auxp = s->aux + opt_offset;
@@ -716,9 +757,9 @@ int     scanopt (scanopt_t *svoid, char **arg, int *optindex)
 	/* case: no args allowed */
 	if (auxp->flags & ARG_NONE) {
 		if (optarg && !is_short) {
-			scanopt_err(s, is_short, SCANOPT_ERR_ARG_NOT_ALLOWED);
+			scanopt_err (s, is_short, errcode = SCANOPT_ERR_ARG_NOT_ALLOWED);
 			INC_INDEX (s, 1);
-			return SCANOPT_ERR_ARG_NOT_ALLOWED;
+			return errcode;
 		}
 		else if (!optarg)
 			INC_INDEX (s, 1);
@@ -729,10 +770,8 @@ int     scanopt (scanopt_t *svoid, char **arg, int *optindex)
 
 	/* case: required */
 	if (auxp->flags & ARG_REQ) {
-		if (!optarg && !has_next) {
-			scanopt_err(s, is_short, SCANOPT_ERR_ARG_NOT_FOUND);
-			return SCANOPT_ERR_ARG_NOT_FOUND;
-		}
+		if (!optarg && !has_next)
+			return scanopt_err (s, is_short, SCANOPT_ERR_ARG_NOT_FOUND);
 
 		if (!optarg) {
 			/* Let the next argv element become the argument. */

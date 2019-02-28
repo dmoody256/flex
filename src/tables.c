@@ -36,6 +36,8 @@
 #include "flexdef.h"
 #include "tables.h"
 
+#include <Winsock2.h>
+
 /** Convert size_t to t_flag.
  *  @param n in {1,2,4}
  *  @return YYTD_DATA*. 
@@ -87,7 +89,7 @@ int yytbl_hdr_init (struct yytbl_hdr *th, const char *version_str,
 
 	th->th_magic = YYTBL_MAGIC;
 	th->th_hsize = (flex_uint32_t) (14 + strlen (version_str) + 1 + strlen (name) + 1);
-	th->th_hsize += (8 - (th->th_hsize % 8)) % 8; // Pad to 64-bit boundary
+	th->th_hsize += yypad64 (th->th_hsize);
 	th->th_ssize = 0;	// Not known at this point.
 	th->th_flags = 0;
 	th->th_version = xstrdup(version_str);
@@ -124,14 +126,14 @@ int yytbl_data_destroy (struct yytbl_data *td)
 /** Write enough padding to bring the file pointer to a 64-bit boundary. */
 static int yytbl_write_pad64 (struct yytbl_writer *wr)
 {
-	int bwritten = 0;
+	int     pad, bwritten = 0;
 
-	while (wr->total_written % (8 * sizeof(flex_uint8_t)) > 0) {
+	pad = yypad64 (wr->total_written);
+	while (pad-- > 0)
 		if (yytbl_write8 (wr, 0) < 0)
 			return -1;
 		else
 			bwritten++;
-	}
 	return bwritten;
 }
 

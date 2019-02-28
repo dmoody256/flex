@@ -499,8 +499,6 @@ int     mkor (int first, int second)
 		}
 	}
 
-	firstst[first] = MIN(firstst[first], firstst[second]);
-
 	finalst[first] = orend;
 	return first;
 }

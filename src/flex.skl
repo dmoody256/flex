@@ -15,7 +15,7 @@
 %#      The quoting is "[[" and "]]" so we don't interfere with
 %#      user code.
 %#
-%# All generated macros for the m4 stage contain the text "m4" or "M4"
+%# All generate macros for the m4 stage contain the text "m4" or "M4"
 %# in them. This is to distinguish them from CPP macros.
 %# The exception to this rule is YY_G, which is an m4 macro,
 %# but it needs to be remain short because it is used everywhere.
@@ -218,24 +218,6 @@ m4_ifdef( [[M4_YY_TABLES_EXTERNAL]],
 
 /* begin standard C headers. */
 %if-c-only
-m4_ifdef( [[M4_YY_ALWAYS_INTERACTIVE]], ,
-[[m4_ifdef( [[M4_YY_NEVER_INTERACTIVE]], ,
-[[/* Feature test macros. Flex uses functions that require a minimum set of
- * macros defined. As defining some macros may hide function declarations that
- * user code might use, be conservative and respect user's definitions as much
- * as possible. In glibc, feature test macros may not be all set up until one
- * of the libc header (that includes <features.h>) is included. This creates
- * a circular dependency when we check the macros. <assert.h> is the safest
- * header we can include and does not declare too many functions we don't need.
- */
-#if !defined(__GNU_LIBRARY__) && defined(__STDC__)
-#include <assert.h>
-#endif
-#if !(defined(_POSIX_C_SOURCE) || defined(_XOPEN_SOURCE) || \
-    defined(_POSIX_SOURCE))
-# define _POSIX_C_SOURCE 1 /* Required for fileno() */
-# define _POSIX_SOURCE 1
-#endif]])]])
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
@@ -248,6 +230,10 @@ m4_ifdef( [[M4_YY_ALWAYS_INTERACTIVE]], ,
 %endif
 /* end standard C headers. */
 
+%if-c-or-c++
+m4preproc_include(`flexint.h')
+%endif
+
 /* begin standard C++ headers. */
 %if-c++-only
 #include <iostream>
@@ -256,10 +242,6 @@ m4_ifdef( [[M4_YY_ALWAYS_INTERACTIVE]], ,
 #include <cstdio>
 #include <cstring>
 /* end standard C++ headers. */
-%endif
-
-%if-c-or-c++
-m4preproc_include(`flexint_shared.h')
 %endif
 
 /* TODO: this is always defined, so inline it */
@@ -2465,7 +2447,7 @@ m4_ifdef( [[M4_YY_NO_TOP_STATE]],,
 %endif
 {
     M4_YY_DECL_GUTS_VAR();
-	return YY_G(yy_start_stack_ptr) > 0 ? YY_G(yy_start_stack)[YY_G(yy_start_stack_ptr) - 1] : YY_START;
+	return YY_G(yy_start_stack)[YY_G(yy_start_stack_ptr) - 1];
 }
 ]])
 
@@ -3310,7 +3292,9 @@ static int yytbl_data_load YYFARGS2(struct yytbl_dmap *, dmap, struct yytbl_read
 
     /* Now eat padding. */
     {
-        while (rd->bread % (8 * sizeof(flex_uint8_t)) > 0) {
+        int pad;
+        pad = yypad64(rd->bread);
+        while(--pad >= 0){
             flex_int8_t t8;
             if(yytbl_read8(&t8,rd) != 0)
                 return -1;
